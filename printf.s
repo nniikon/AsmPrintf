@@ -88,7 +88,7 @@ MyPrintf:
 
     ; If it's a '\0'
         test bl, bl
-        jz .exit                                                                ; TODO: reverse statement to make it more effective   
+        jz printfExit                                                          ; TODO: reverse statement to make it more effective   
 
     ; If it's a '%'
         cmp bl, '%'
@@ -111,7 +111,10 @@ MyPrintf:
 
         jmp .printNextCharacter
 
-.exit:
+printfExit:
+
+    ; Setup the return value
+        mov rax, r13
 
     ; Restore regs
         pop r13
@@ -273,23 +276,15 @@ PrintSpecifier:
 ;; Handles error cased.
 ;;=============================================================================
 .printError:
-   ;-----------------------------------
-   ; System call №1 (write to file)
-   ;    rax - 1
-   ;    rdi - file descriptor
-   ;    rsi - string
-   ;    rdx - string length
-   ;-----------------------------------
-        mov rax, 1
-        mov rdi, 1
-        mov rsi, ErrorMsg
-        mov rdx, ErrorMsgLen
-        syscall
-    
-    ; Increment the number of symbols outputted
-        add r13, ErrorMsgLen
-        dec r13
-        ret
+    ; Set return value to -1
+        mov r13, -1
+
+    ; Restore rsp
+        add rsp, 16
+
+    ; Evacuate
+        jmp printfExit
+
 ;;=============================================================================
 ;; Converts floating-point number to the decimal notation
 ;;                                                       with a fixed precision
@@ -647,6 +642,3 @@ Numbers             db "0123456789ABCDEF", 0x00
 
 PercentMsg:         db "%", 0x00
 PercentMsgLen:  equ $ - PercentMsg
-
-ErrorMsg:       db "hui",  0x00
-ErrorMsgLen:    equ $ - ErrorMsg
