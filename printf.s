@@ -410,9 +410,11 @@ PrintSpecifier:
 ;; FIXME: it doesn't work like this =(
 ;;=============================================================================
 .printNumberOfCharactersWritten:
-        mov rax, r13
-            
-        call PrintUnsigned
+        mov rax, [r10 + rbp] 
+        mov [rax], r13
+
+    ; Move to the next argument
+        add r10, 8
 
         ret
 ;;=============================================================================
