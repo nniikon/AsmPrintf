@@ -431,7 +431,52 @@ PrintSpecifier:
     ; Put the number into rax
         mov eax, [r10 + rbp]
 
-        call PrintUnsigned
+        mov rsi, PrintfBuffer
+        mov rcx, rsi
+
+    ; Start from the end of the buffer
+        add rcx, PrintfBufferSize - 1
+
+     ; Null-terminate the string
+        mov byte [rcx], 0
+
+    ; Convert the number to string
+.unsignedToStr:
+        xor rdx, rdx
+
+        mov rbx, 10
+        div rbx
+
+     ; Convert the remainder to ASCII
+        add dl, '0'
+
+    ;  Store the character in the buffer
+        dec rcx
+        mov [rcx], dl
+
+    ; Check if there are more digits
+        test eax, eax
+        jnz .unsignedToStr
+
+    ; Calculate the string's length
+        sub rsi, rcx
+        add rsi, PrintfBufferSize
+   ;-----------------------------------
+   ; System call №1 (write to file)
+   ;    rax - 1
+   ;    rdi - file descriptor
+   ;    rsi - string
+   ;    rdx - string length
+   ;-----------------------------------
+        mov rdx, rsi
+        mov rax, 1
+        mov rsi, rcx
+        mov rdi, 1
+        syscall
+
+    ; Increment the number of symbols outputted
+        add r13, rdx
+        dec r13
 
     ; Move to the next argument
         add r10, 8
@@ -502,62 +547,6 @@ PrintSpecifier:
         inc r13
         ret
 ;;=============================================================================
-
-
-;;=============================================================================
-;; Converts an unsigned integer into decimal representation  
-;;
-;; Input:   eax - number
-;;=============================================================================
-PrintUnsigned:
-        mov rsi, PrintfBuffer
-        mov rcx, rsi
-
-    ; Start from the end of the buffer
-        add rcx, PrintfBufferSize - 1
-
-     ; Null-terminate the string
-        mov byte [rcx], 0
-
-    ; Convert the number to string
-.unsignedToStr:
-        xor rdx, rdx
-
-        mov rbx, 10
-        div rbx
-
-     ; Convert the remainder to ASCII
-        add dl, '0'
-
-    ;  Store the character in the buffer
-        dec rcx
-        mov [rcx], dl
-
-    ; Check if there are more digits
-        test eax, eax
-        jnz .unsignedToStr
-
-    ; Calculate the string's length
-        sub rsi, rcx
-        add rsi, PrintfBufferSize
-   ;-----------------------------------
-   ; System call №1 (write to file)
-   ;    rax - 1
-   ;    rdi - file descriptor
-   ;    rsi - string
-   ;    rdx - string length
-   ;-----------------------------------
-        mov rdx, rsi
-        mov rax, 1
-        mov rsi, rcx
-        mov rdi, 1
-        syscall
-
-    ; Increment the number of symbols outputted
-        add r13, rdx
-        dec r13
-
-        ret
 
 
 ;;=============================================================================
