@@ -341,7 +341,7 @@ PrintSpecifier:
     
     ; Check the isNegative flag
         test r12, r12
-        jz .noMinus
+        jnz .noMinus
 
 .addMinus:
         dec rcx
