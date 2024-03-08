@@ -7,22 +7,6 @@ section .text
 
 global MyAMD64Printf
 
-;global _start 
-
-;_start:
-;        push 0b10101010
-;        mov r9, 0q712
-;        mov r8, 0xAFC12
-;        mov ecx, 123 
-;        mov edx, -32 
-;        mov rsi, SubMsg1
-;        mov rdi, Msg
-;        call MyAMD64Printf  
-;
-;        mov rax, 0x3c
-;        xor rdi, rdi
-;        syscall
-
 ;;==============================================================================
 ;; Printf clone for AMD64 ABI
 ;;
@@ -48,7 +32,6 @@ MyAMD64Printf:
         pop r8
         pop r9
 
-
         push rbp
         mov rbp, [PrintfReturnAddress]
         ret
@@ -59,25 +42,83 @@ MyAMD64Printf:
 ;; rdi   - format string
 ;; stack - arguments
 ;;
-;;      | n'th argument  |  - rbp + 16 + 8n
-;;      |      ...       | 
-;;      | 2st argument   |  - rbp + 24
-;;      | 1st argument   |  - rbp + 16
-;;      | return address |  - rbp + 8
-;;      | saved rbp      | <- rbp
+;;      | n'th integer argument |  ~ rbp + 16 + 8n
+;;      |          ...          | 
+;;      | 2'nd integer argument |  ~ rbp + 24
+;;      | 1'st integer argument |  ~ rbp + 16
+;;      | return address        |  ~ rbp + 8
+;;      | saved rbp             | <- rbp
+;;      | 1'st float argument   |  ~ rbp - 8 
+;;      | 2'st float argument   |  ~ rbp - 16 
+;;      |          ...          | 
+;;      | 8'st float argument   |  ~ rbp - 64
 ;;
 ;;==============================================================================
 MyPrintf:
         push rbp
         mov rbp, rsp
 
+    ; Check if there's any float arguments
+        test eax, eax
+        jz .noFloatArgs
+
+    ;----------------------------------
+    ; Allocate memory for the float arguments
+    ; At max we can save 8 floats in our frame
+    ; Registers xmm0-xmm7 (read AMD64 ABI)
+    ;----------------------------------
+        cmp eax, 8
+        jbe .regFloats
+.stkFloats:
+    ; We only need to allocate stack memory for the registers
+        mov eax, 8
+.regFloats:
+        mov eax, eax
+        shl rax, 4
+        sub rsp, rax
+
+    ; Load to the stack the float arguments 
+        shr rax, 4
+        jmp [.jumpTable + rax * 8]
+.jumpTable:
+        dq     .noFloatArgs
+        dq     .float1
+        dq     .float2 
+        dq     .float3 
+        dq     .float4 
+        dq     .float5 
+        dq     .float6 
+        dq     .float7 
+        dq     .float8 
+.float8:
+        movsd qword [rbp - 64], xmm7
+.float7:
+        movsd qword [rbp - 56], xmm6
+.float6:
+        movsd qword [rbp - 48], xmm5
+.float5:
+        movsd qword [rbp - 40], xmm4
+.float4:
+        movsd qword [rbp - 32], xmm3
+.float3:
+        movsd qword [rbp - 24], xmm2
+.float2:
+        movsd qword [rbp - 16], xmm1
+.float1:
+        movsd qword [rbp - 8], xmm0
+
+.noFloatArgs:
     ; Save regs
         push r13
+        push r14
 
+    ; Save the format into r8
         mov r8, rdi
 
-    ; Store the current argument shift
+    ; Store the current integer argument shift
         mov r10, 16
+    ; Store the current float argument shift
+        mov r14, -8 
 
     ; Store the current number of characters printed
         xor r13, r13
@@ -117,6 +158,7 @@ printfExit:
         mov rax, r13
 
     ; Restore regs
+        pop r14
         pop r13
 
         mov rsp, rbp
@@ -287,9 +329,51 @@ PrintSpecifier:
 
 ;;=============================================================================
 ;; Converts floating-point number to the decimal notation
-;;                                                       with a fixed precision
+;;                                                 with a fixed precision of 6
+;; FIXME: 3 system calls is probably too much 
 ;;=============================================================================
 .printFloat:
+    ; Load the number into xmm0
+        movsd xmm0, qword [rbp + r14]
+
+    ; Output the integer part
+        xor eax, eax
+        cvttsd2si eax, xmm0
+        mov rsi, PrintfIntBuffer
+        
+        call PrintInteger
+        
+    ; Output the dot
+   ;-----------------------------------
+   ; System call №1 (write to file)
+   ;    rax - 1
+   ;    rdi - file descriptor
+   ;    rsi - string
+   ;    rdx - string length
+   ;-----------------------------------
+        mov rax, 1
+        mov rdx, 1
+        mov rdi, 1
+        mov rsi, FloatDelimiter 
+        syscall
+
+    ; Output the multiplied by 10^n decimal part
+        cvttpd2dq xmm1, xmm0
+        cvtdq2pd  xmm1, xmm1
+        subsd     xmm0, xmm1
+        mulsd     xmm0, [FLOAT_PRECISION_FACT]
+        cvttsd2si eax, xmm0
+
+        test eax, eax
+        jns .positiveFraction
+.negativeFraction:
+        neg eax
+.positiveFraction:
+        mov rsi, PrintfIntBuffer
+
+        call PrintInteger
+
+        ret
 ;;=============================================================================
 ;; Converts an unsigned integer into hexadecimal representation
 ;;=============================================================================
@@ -301,74 +385,14 @@ PrintSpecifier:
 ;; Converts a signed integer into decimal representation
 ;;=============================================================================
 .printInteger:
-        push r12
-
     ; Put the number into rax
         mov eax, [r10 + rbp]
+        mov rsi, PrintfIntBuffer
 
-        mov rsi, PrintfBuffer
-        mov rcx, rsi
+        call PrintInteger
 
-    ; Start from the end of the buffer
-        add rcx, PrintfBufferSize - 1
-
-        test eax, eax
-        jns .isPositive
-
-.isNegative:
-        neg eax
-    ; Set IsNegative flag 
-        mov r12, 1
-.isPositive:
-
-    ; Convert the number to string
-.signedToStr:
-        xor rdx, rdx
-
-        mov rbx, 10
-        div rbx
-
-     ; Convert the remainder to ASCII
-        add dl, '0'
-
-        dec rcx
-    ;  Store the character in the buffer
-        mov [rcx], dl
-
-    ; Check if there are more digits
-        test rax, rax
-        jnz .signedToStr
-    
-    ; Check the isNegative flag
-        test r12, r12
-        jnz .noMinus
-
-.addMinus:
-        dec rcx
-        mov byte [rcx], '-';
-.noMinus:
-    ; Calculate the string's length
-        sub rsi, rcx
-        add rsi, PrintfBufferSize
-   ;-----------------------------------
-   ; System call №1 (write to file)
-   ;    rax - 1
-   ;    rdi - file descriptor
-   ;    rsi - string
-   ;    rdx - string length
-   ;-----------------------------------
-        mov rdx, rsi
-        mov rax, 1
-        mov rsi, rcx
-        mov rdi, 1
-        syscall
-
-    ; Increment the number of symbols outputted
-        add r13, rdx 
-        dec r13
     ; Move to the next argument
         add r10, 8
-        pop r12
         ret
 ;;=============================================================================
 ;; Converts an unsigned integer into octal representation
@@ -383,7 +407,7 @@ PrintSpecifier:
 .printCharacter:
         mov rax, [r10 + rbp]
 
-        mov rcx, PrintfBuffer
+        mov rcx, PrintfIntBuffer
         mov byte [rcx], al
    ;-----------------------------------
    ; System call №1 (write to file)
@@ -431,11 +455,11 @@ PrintSpecifier:
     ; Put the number into rax
         mov eax, [r10 + rbp]
 
-        mov rsi, PrintfBuffer
+        mov rsi, PrintfIntBuffer
         mov rcx, rsi
 
     ; Start from the end of the buffer
-        add rcx, PrintfBufferSize - 1
+        add rcx, PRINTF_BUFFER_SIZE - 1
 
      ; Null-terminate the string
         mov byte [rcx], 0
@@ -460,19 +484,7 @@ PrintSpecifier:
 
     ; Calculate the string's length
         sub rsi, rcx
-        add rsi, PrintfBufferSize
-   ;-----------------------------------
-   ; System call №1 (write to file)
-   ;    rax - 1
-   ;    rdi - file descriptor
-   ;    rsi - string
-   ;    rdx - string length
-   ;-----------------------------------
-        mov rdx, rsi
-        mov rax, 1
-        mov rsi, rcx
-        mov rdi, 1
-        syscall
+        add rsi, PRINTF_BUFFER_SIZE
 
     ; Increment the number of symbols outputted
         add r13, rdx
@@ -560,11 +572,11 @@ PrintNumberByBits:
     ; Put the number into rax
         mov eax, [r10 + rbp]
 
-        mov rsi, PrintfBuffer
+        mov rsi, PrintfIntBuffer
         mov rdi, rsi
 
     ; Start from the end of the buffer
-        add rdi, PrintfBufferSize - 1
+        add rdi, PRINTF_BUFFER_SIZE - 1
 
      ; Null-terminate the string
         mov byte [rdi], 0
@@ -598,7 +610,7 @@ PrintNumberByBits:
 
     ; Calculate the string's length
         sub rsi, rdi 
-        add rsi, PrintfBufferSize
+        add rsi, PRINTF_BUFFER_SIZE
    ;-----------------------------------
    ; System call №1 (write to file)
    ;    rax - 1
@@ -622,14 +634,92 @@ PrintNumberByBits:
         pop r12
         ret
 
+;;=============================================================================
+;; Converts an integer into decimal representation
+;; Input:
+;;      eax - integer
+;;      rsi - buffer
+;;
+;;=============================================================================
+PrintInteger:
+    ; Save the regs
+        push r12
+        xor r12, r12
+
+    ; Start from the end of the buffer
+        mov rcx, rsi
+        add rcx, PRINTF_BUFFER_SIZE - 1
+
+        test eax, eax
+        jns .isPositive
+
+.isNegative:
+        neg eax
+    ; Set IsNegative flag 
+        mov r12, 1
+.isPositive:
+
+    ; Convert the number to string
+.signedToStr:
+        xor rdx, rdx
+
+        mov rbx, 10
+        div rbx
+
+     ; Convert the remainder to ASCII
+        add dl, '0'
+
+        dec rcx
+    ;  Store the character in the buffer
+        mov [rcx], dl
+
+    ; Check if there are more digits
+        test rax, rax
+        jnz .signedToStr
+    
+    ; Check the isNegative flag
+        test r12, r12
+        jz .noMinus
+
+.addMinus:
+        dec rcx
+        mov byte [rcx], '-';
+.noMinus:
+    ; Calculate the string's length
+        sub rsi, rcx
+        add rsi, PRINTF_BUFFER_SIZE
+   ;-----------------------------------
+   ; System call №1 (write to file)
+   ;    rax - 1
+   ;    rdi - file descriptor
+   ;    rsi - string
+   ;    rdx - string length
+   ;-----------------------------------
+        mov rdx, rsi
+        mov rax, 1
+        mov rsi, rcx
+        mov rdi, 1
+        syscall
+
+    ; Increment the number of symbols outputted
+        add r13, rdx 
+        dec r13
+
+    ; Restore the regs
+        pop r12
+        ret
 
 segment .data
 
-PrintfReturnAddress dq 0
-PrintfBufferSize    equ 50
-PrintfBuffer        db PrintfBufferSize dup(0)
+PRINTF_FLOAT_PRECISION  equ 6
+FLOAT_PRECISION_FACT    dq  0x412e848000000000 ; double 1.0E+6
+PrintfReturnAddress     dq  0
+PRINTF_BUFFER_SIZE      equ 50
+PrintfIntBuffer         db      PRINTF_BUFFER_SIZE dup(0)
+PrintfFracBuffer        db '.', PRINTF_BUFFER_SIZE dup(0)
+FloatDelimiter          db '.', 0x00
 
-Numbers             db "0123456789ABCDEF", 0x00
+Numbers                 db "0123456789ABCDEF", 0x00
 
-PercentMsg:         db "%", 0x00
-PercentMsgLen:  equ $ - PercentMsg
+PercentMsg              db "%", 0x00
+PercentMsgLen           equ $ - PercentMsg
