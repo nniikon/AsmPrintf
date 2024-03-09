@@ -467,7 +467,6 @@ PrintSpecifier:
 ;;=============================================================================
 .printNumberOfCharactersWritten:
         call GetIntegerArgument
-        mov eax, eax
         mov [rax], r13
 
         ret
