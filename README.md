@@ -12,11 +12,12 @@ Supports those format specifiers:
     %c:      Single character
     %s:      String
     %p:      Pointer address (represented as hexadecimal)
+    %f:      Floating-point number with a fixed precision
     %%:      Literal percentage sign
     %n:      Returns the number of charecters outputted so far
 ```
 
-Returns the number of characters outputted or -1 on error.
+Returns the number of characters outputted or ```-1``` on error.
 
 ## Examples
 ```
@@ -26,6 +27,12 @@ Output: My name is Ded and I'm 100 years old
 ```
 MyAMD64Printf("%d = 0x%x = 0q%o = 0b%b\n", 100, 100, 100, 100);
 Output: 100 = 0x64 = 0q144 = 0b1100100
+```
+```
+int a = MyAMD64Printf("My favorite number is %n%f\n", &b, 13.234523);
+Output: My favorite number is 13.234523
+Variables: a = 33
+           b = 22
 ```
 
 ## Usage
