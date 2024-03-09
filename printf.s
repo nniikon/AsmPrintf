@@ -18,19 +18,7 @@ MyAMD64Printf:
         mov [PrintfReturnAddress], rbp
         pop rbp
 
-        push r9       
-        push r8       
-        push rcx
-        push rdx
-        push rsi
-
         call MyPrintf
-
-        pop rsi
-        pop rdx
-        pop rcx
-        pop r8
-        pop r9
 
         push rbp
         mov rbp, [PrintfReturnAddress]
@@ -42,26 +30,46 @@ MyAMD64Printf:
 ;; rdi   - format string
 ;; stack - arguments
 ;;
-;;      | n'th integer argument |  ~ rbp + 16 + 8n
 ;;      |          ...          | 
-;;      | 2'nd integer argument |  ~ rbp + 24
-;;      | 1'st integer argument |  ~ rbp + 16
+;;      | 2'nd stack argument   |  ~ rbp + 24
+;; r15  | 1'st stack argument   |  ~ rbp + 16
+;;      +-----------------------+
 ;;      | return address        |  ~ rbp + 8
 ;;      | saved rbp             | <- rbp
-;;      | 1'st float argument   |  ~ rbp - 8 
-;;      | 2'st float argument   |  ~ rbp - 16 
+;;      +-----------------------+
+;; r10  | 1'st integer argument |  ~ rbp - 8 
 ;;      |          ...          | 
-;;      | 8'st float argument   |  ~ rbp - 64
+;;      | 5'th integer argument |  ~ rbp - 40 
+;;      +-----------------------+
+;; r14  | 1'st float argument   |  ~ rbp - 48
+;;      | 2'nd float argument   |  ~ rbp - 56
+;;      |          ...          | 
+;;      | n'st float argument   |
+;;      +-----------------------+
+;;  * - n is determined by the rax register,
+;;           which tells how much float registers are passed into the function
 ;;
 ;;==============================================================================
 MyPrintf:
         push rbp
         mov rbp, rsp
 
+    ;----------------------------------
+    ; Allocate memory for the integer arguments
+    ; At max we can save 5 ints in our frame
+    ; Registers rsi, rdx, rcx, r8, r9 (read AMD64 ABI)
+    ;   (Don't forget that the rdi register is holding a format string)
+    ;----------------------------------
+        sub rsp, 48
+        mov [rbp -  8], rsi
+        mov [rbp - 16], rdx
+        mov [rbp - 24], rcx
+        mov [rbp - 32], r8
+        mov [rbp - 40], r9
+
     ; Check if there's any float arguments
         test eax, eax
         jz .noFloatArgs
-
     ;----------------------------------
     ; Allocate memory for the float arguments
     ; At max we can save 8 floats in our frame
@@ -74,11 +82,12 @@ MyPrintf:
         mov eax, 8
 .regFloats:
         mov eax, eax
-        shl rax, 4
+        shl rax, 5
+    ; Allocate 16n bytes on the stack
         sub rsp, rax
 
     ; Load to the stack the float arguments 
-        shr rax, 4
+        shr rax, 5
         jmp [.jumpTable + rax * 8]
 .jumpTable:
         dq     .noFloatArgs
@@ -91,35 +100,37 @@ MyPrintf:
         dq     .float7 
         dq     .float8 
 .float8:
-        movsd qword [rbp - 64], xmm7
+        movsd qword [rbp - 104], xmm7
 .float7:
-        movsd qword [rbp - 56], xmm6
+        movsd qword [rbp - 96], xmm6
 .float6:
-        movsd qword [rbp - 48], xmm5
+        movsd qword [rbp - 88], xmm5
 .float5:
-        movsd qword [rbp - 40], xmm4
+        movsd qword [rbp - 80], xmm4
 .float4:
-        movsd qword [rbp - 32], xmm3
+        movsd qword [rbp - 72], xmm3
 .float3:
-        movsd qword [rbp - 24], xmm2
+        movsd qword [rbp - 64], xmm2
 .float2:
-        movsd qword [rbp - 16], xmm1
+        movsd qword [rbp - 56], xmm1
 .float1:
-        movsd qword [rbp - 8], xmm0
+        movsd qword [rbp - 48], xmm0
 
 .noFloatArgs:
     ; Save regs
         push r13
         push r14
+        push r15
 
     ; Save the format into r8
         mov r8, rdi
 
     ; Store the current integer argument shift
-        mov r10, 16
+        mov r10, -8
     ; Store the current float argument shift
-        mov r14, -8 
-
+        mov r14, -48
+    ; Store the current stack argument shift
+        mov r15, 16
     ; Store the current number of characters printed
         xor r13, r13
 
@@ -158,6 +169,7 @@ printfExit:
         mov rax, r13
 
     ; Restore regs
+        pop r15
         pop r14
         pop r13
 
@@ -214,13 +226,49 @@ PrintFormatString:
 
 
 ;;==============================================================================
+;; Get integer argument
+;; 
+;; Returns:
+;;      rax - integer argument
+;;==============================================================================
+GetIntegerArgument:
+        cmp r10, -48
+        jnz .isNotOnStack
+    
+.isOnStack:
+        mov rax, [rbp + r15]
+        add r15, 8
+        ret
+.isNotOnStack:
+        mov rax, [rbp + r10]
+        sub r10, 8
+        ret
+
+;;==============================================================================
+;; Get float argument
+;; 
+;; Returns:
+;;      xmm0 - float argument
+;;==============================================================================
+GetFloatArgument:
+        cmp r14, -112
+        jnz .isNotOnStack
+    
+.isOnStack:
+        movsd xmm0, [rbp + r15]
+        add r15, 8
+        ret
+.isNotOnStack:
+        movsd xmm0, [rbp + r14]
+        sub r14, 8
+        ret
+
+;;==============================================================================
 ;; Prints a specifier
 ;;
 ;; Input:
 ;;      r10 - data offset
 ;;      rbp - data pointer
-;;
-;;
 ;;==============================================================================
 PrintSpecifier:
         sub     ebx, 37
@@ -330,11 +378,9 @@ PrintSpecifier:
 ;;=============================================================================
 ;; Converts floating-point number to the decimal notation
 ;;                                                 with a fixed precision of 6
-;; FIXME: 3 system calls is probably too much 
 ;;=============================================================================
 .printFloat:
-    ; Load the number into xmm0
-        movsd xmm0, qword [rbp + r14]
+        call GetFloatArgument 
 
     ; Output the integer part
         xor eax, eax
@@ -343,19 +389,8 @@ PrintSpecifier:
         
         call PrintInteger
         
-    ; Output the dot
-   ;-----------------------------------
-   ; System call №1 (write to file)
-   ;    rax - 1
-   ;    rdi - file descriptor
-   ;    rsi - string
-   ;    rdx - string length
-   ;-----------------------------------
-        mov rax, 1
-        mov rdx, 1
-        mov rdi, 1
-        mov rsi, FloatDelimiter 
-        syscall
+    ; Increment the number of outputted symbols
+        inc r13
 
     ; Output the multiplied by 10^n decimal part
         cvttpd2dq xmm1, xmm0
@@ -371,7 +406,7 @@ PrintSpecifier:
 .positiveFraction:
         mov rsi, PrintfIntBuffer
 
-        call PrintInteger
+        call PrintDecimal
 
         ret
 ;;=============================================================================
@@ -385,14 +420,13 @@ PrintSpecifier:
 ;; Converts a signed integer into decimal representation
 ;;=============================================================================
 .printInteger:
-    ; Put the number into rax
-        mov eax, [r10 + rbp]
+        call GetIntegerArgument
+        mov eax, eax
+
         mov rsi, PrintfIntBuffer
 
         call PrintInteger
 
-    ; Move to the next argument
-        add r10, 8
         ret
 ;;=============================================================================
 ;; Converts an unsigned integer into octal representation
@@ -405,7 +439,8 @@ PrintSpecifier:
 ;; Writes a single character
 ;;=============================================================================
 .printCharacter:
-        mov rax, [r10 + rbp]
+        call GetIntegerArgument
+        mov eax, eax
 
         mov rcx, PrintfIntBuffer
         mov byte [rcx], al
@@ -423,22 +458,17 @@ PrintSpecifier:
         syscall
 
     ; Increment the number of symbols outputted
-        add r13, rdx 
-        dec r13
+        inc r13
 
-    ; Move to the next argument
-        add r10, 8
         ret
 ;;=============================================================================
 ;; Outputs the number of characters written so far by this call to the function
 ;; FIXME: it doesn't work like this =(
 ;;=============================================================================
 .printNumberOfCharactersWritten:
-        mov rax, [r10 + rbp] 
+        call GetIntegerArgument
+        mov eax, eax
         mov [rax], r13
-
-    ; Move to the next argument
-        add r10, 8
 
         ret
 ;;=============================================================================
@@ -452,8 +482,8 @@ PrintSpecifier:
 ;; Converts an unsigned integer into decimal representation  
 ;;=============================================================================
 .printUnsigned:
-    ; Put the number into rax
-        mov eax, [r10 + rbp]
+        call GetIntegerArgument
+        mov eax, eax
 
         mov rsi, PrintfIntBuffer
         mov rcx, rsi
@@ -490,8 +520,6 @@ PrintSpecifier:
         add r13, rdx
         dec r13
 
-    ; Move to the next argument
-        add r10, 8
         ret
 ;;=============================================================================
 ;; Writes an implementation defined character sequence defining a pointer. 
@@ -502,9 +530,8 @@ PrintSpecifier:
 ;; Writes a character string 
 ;;=============================================================================
 .printString:
-        xor dx, dx
-        mov r9, [r10 + rbp]
-        mov dl, byte [r9]
+        call GetIntegerArgument
+        mov dl, byte [rax]
 
     ; While guard
         test dl, dl
@@ -513,9 +540,9 @@ PrintSpecifier:
         xor  rdx, rdx
 .percentStrlen:
         inc  rdx
-        mov  cl, [r9+rdx]
+        mov  cl, [rax+rdx]
         test cl, cl
-        jne  .percentStrlen
+        jnz  .percentStrlen
 
    ;-----------------------------------
    ; System call №1 (write to file)
@@ -524,16 +551,14 @@ PrintSpecifier:
    ;    rsi - string
    ;    rdx - string length
    ;-----------------------------------
+        mov rsi, rax 
         mov rax, 1
-        mov rsi, r9 
         mov rdi, 1
         syscall
 
     ; Increment the number of symbols outputted
         add r13, rdx 
         dec r13
-    ; Move to the next argument
-        add r10, 8
 
 .exitEmpty:
         ret
@@ -569,8 +594,7 @@ PrintSpecifier:
 PrintNumberByBits:
         push r12
 
-    ; Put the number into rax
-        mov eax, [r10 + rbp]
+        call GetIntegerArgument
 
         mov rsi, PrintfIntBuffer
         mov rdi, rsi
@@ -623,9 +647,6 @@ PrintNumberByBits:
         mov rsi, rdi 
         mov rdi, 1
         syscall
-
-    ; Move to the next argument
-        add r10, 8
 
     ; Increment the number of symbols outputted
         add r13, rdx
@@ -709,17 +730,66 @@ PrintInteger:
         pop r12
         ret
 
+;;=============================================================================
+;; Converts an integer into a decimal part of a number. 
+;; Input:
+;;      eax - integer
+;;      rsi - buffer
+;;
+;;=============================================================================
+PrintDecimal:
+    ; Start from the end of the buffer
+        add rsi, PRINTF_BUFFER_SIZE - 1
+
+    ; Repeat for exactly the number of float precision digits
+        mov edi, PRINTF_FLOAT_PRECISION
+    ; Convert the number to string
+.unsignedToStr:
+        xor rdx, rdx
+
+        mov rbx, 10
+        div rbx
+
+     ; Convert the remainder to ASCII
+        add dl, '0'
+
+    ;  Store the character in the buffer
+        dec rsi 
+        mov [rsi], dl
+
+        test edi, edi
+        dec edi
+        jnz .unsignedToStr
+
+    ; Add dot to the beggining
+        dec rsi
+        mov byte [rsi], '.'
+    
+   ;-----------------------------------
+   ; System call №1 (write to file)
+   ;    rax - 1
+   ;    rdi - file descriptor
+   ;    rsi - string
+   ;    rdx - string length
+   ;-----------------------------------
+        mov rdx, 7
+        mov rax, 1
+        mov rdi, 1
+        syscall
+
+    ; Increment the number of symbols outputted
+        add r13, 7
+        ret
+
 segment .data
 
 PRINTF_FLOAT_PRECISION  equ 6
 FLOAT_PRECISION_FACT    dq  0x412e848000000000 ; double 1.0E+6
 PrintfReturnAddress     dq  0
 PRINTF_BUFFER_SIZE      equ 50
-PrintfIntBuffer         db      PRINTF_BUFFER_SIZE dup(0)
-PrintfFracBuffer        db '.', PRINTF_BUFFER_SIZE dup(0)
-FloatDelimiter          db '.', 0x00
+PrintfIntBuffer         db  PRINTF_BUFFER_SIZE dup(0)
 
-Numbers                 db "0123456789ABCDEF", 0x00
+Numbers                 db "0123456789abcdef", 0x00
 
 PercentMsg              db "%", 0x00
 PercentMsgLen           equ $ - PercentMsg
