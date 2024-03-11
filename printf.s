@@ -271,95 +271,34 @@ GetFloatArgument:
 ;;      rbp - data pointer
 ;;==============================================================================
 PrintSpecifier:
-        sub     ebx, 37
-        cmp     bl, 83
+        sub     ebx, '%'
+        cmp     bl, 'x' - '%'
         ja      .printError
         movzx   ebx, bl
         jmp     [.jumpTable + rbx*8]
 .jumpTable:
-        dq   .printPercent
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printFloat
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printHex
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
+        dq          .printPercent
+        times 'F' - '%' - 1 dq .printError 
+        dq          .printFloat
+        times 'X' - 'F' - 1 dq .printError 
+        dq          .printHex
+        times 'b' - 'X' - 1  dq .printError 
         dq   .printBinary
         dq   .printCharacter
         dq   .printInteger
-        dq   .printError
+        times 'f' - 'd' - 1  dq .printError 
         dq   .printFloat
-        dq   .printError
-        dq   .printError
+        times 'i' - 'f' - 1  dq .printError 
         dq   .printInteger
-        dq   .printError
-        dq   .printError
-        dq   .printError
-        dq   .printError
+        times 'n' - 'i' - 1  dq .printError 
         dq   .printNumberOfCharactersWritten
         dq   .printOctal
         dq   .printAddress
-        dq   .printError
-        dq   .printError
+        times 's' - 'p' - 1  dq .printError 
         dq   .printString
         dq   .printError
         dq   .printUnsigned
-        dq   .printError
-        dq   .printError
+        times 'x' - 'u' - 1  dq .printError 
         dq   .printHex
 
 ;;=============================================================================
@@ -463,7 +402,6 @@ PrintSpecifier:
         ret
 ;;=============================================================================
 ;; Outputs the number of characters written so far by this call to the function
-;; FIXME: it doesn't work like this =(
 ;;=============================================================================
 .printNumberOfCharactersWritten:
         call GetIntegerArgument
